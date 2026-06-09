@@ -1,298 +1,202 @@
-# 🏎️ NFS Raycaster — Pseudo-3D Racing Game in C
+# Raycaster — True 3D Raycasting Engine in C
 
-A **Need for Speed-style pseudo-3D racing game** built from scratch in pure C using the classic segment-projection raycasting technique. No game engines, no frameworks — just C and SDL2.
+A **true 3D raycaster** built from scratch in pure C with SDL2. Wolfenstein-style DDA algorithm — cast rays through a 2D grid, get wall distances, draw columns. That's the engine.
 
-![Platform](https://img.shields.io/badge/platform-Linux%20%2F%20WSL-green)
-![Language](https://img.shields.io/badge/language-C11-blue)
-![License](https://img.shields.io/badge/license-MIT-yellow)
+No game logic. No physics. No AI. Just the raycaster.
 
 ---
 
-## 🎮 Features
+## What It Does
 
-- **Pseudo-3D raycaster engine** — OutRun/NFS-style road rendering using segment projection
-- **Curves & hills** — sin-wave-based track with elevation changes and banking
-- **12 rival cars** with basic AI, collision detection, and speed variation
-- **Full HUD** — speedometer, gear indicator, lap counter, best lap time
-- **3-2-1 countdown** and race completion screen
-- **Off-road penalty** — driving on the grass slows you down
-- **Centrifugal force** — curves push you toward the outside
-- **Procedural scenery** — trees, roadside posts, mountains, gradient sky
-- **Bitmap text renderer** — no SDL_ttf dependency, custom 3×5 pixel font
-- **Zero external assets** — everything is drawn in code
+- **DDA raycasting** — Digital Differential Analyser, the real algorithm Wolfenstein 3D uses
+- **Textured walls** — procedurally generated brick, stone, metal, concrete textures
+- **Floor & ceiling casting** — real floor raycasting with checkerboard tiles
+- **Sprite rendering** — billboarded sprites with Z-buffer occlusion
+- **Distance fog** — walls and floor fade with distance
+- **Wall shading** — EW-facing walls are darker than NS-facing walls
+- **Minimap** — top-left overlay showing the grid and player position
+- **Framebuffer rendering** — direct pixel buffer blitted to SDL2 texture
 
 ---
 
-## 📸 How It Works
+## How Raycasting Works
 
-This game uses the **segment-projection raycasting** technique, the same method used in classic arcade racers like **OutRun (1986)**, **Pole Position (1982)**, and early **Need for Speed** titles.
+### The Core Idea
 
-### The Raycasting Principle
+You're in a 2D grid. Each cell is either empty or a wall. For every vertical column of pixels on screen, you cast a single ray from the player's position and walk it through the grid until it hits a wall. The distance tells you how tall to draw that wall strip.
 
 ```
-   Player (Camera)
-        \
-         \  ← ray for each scanline
-          \
-           \
-            → Road Segment (projected)
+        Screen
+     ┌──────────────┐
+     │  █           │  ← Close wall = tall strip
+     │  ██          │
+     │  ███         │
+     │  ████        │
+     │  ██████      │
+     │  ████████    │
+     │  ██████████  │  ← Far wall = short strip
+     └──────────────┘
+
+     Each column = 1 ray
 ```
 
-Instead of casting rays horizontally like Wolfenstein 3D, a racing raycaster works **depth-wise**:
+### DDA Algorithm (per ray)
 
-1. **The track** is a chain of segments, each with a curve value and elevation
-2. **Each frame**, we project 300 segments from the camera position into screen space
-3. **Segments are drawn back-to-front** (painter's algorithm) — far segments first
-4. **Curve accumulation** shifts each segment laterally, creating the illusion of a curved road
-5. **Elevation values** shift segments vertically, creating hills and valleys
+1. **Calculate ray direction** from player direction + camera plane
+2. **Find which grid edge the ray hits first** (side_dist_x vs side_dist_y)
+3. **Step through the grid** — always jump to the nearest next grid line
+4. **Stop when you hit a wall** — record which side was hit (NS or EW)
+5. **Calculate perpendicular distance** — this avoids the fisheye effect
+6. **Draw the wall strip** — height = screen_height / distance
 
-The result is a convincing 3D perspective from a 2D data structure — pure math, no GPU 3D pipeline needed.
+### Why Perpendicular Distance?
+
+If you use raw Euclidean distance, walls look curved (fisheye). Using perpendicular distance — the distance projected onto the camera direction — keeps walls flat:
+
+```
+perp_dist = (side_dist_x - delta_dist_x)   // for NS wall hit
+perp_dist = (side_dist_y - delta_dist_y)   // for EW wall hit
+```
+
+### Camera Plane & FOV
+
+The camera plane vector controls the field of view. It's always perpendicular to the direction vector:
+
+```
+dir   = (1.0, 0.0)    // looking east
+plane = (0.0, 0.66)   // 66° FOV
+
+ray = dir + plane * (2 * x / SCREEN_W - 1)
+```
+
+Changing `plane` magnitude changes FOV. `0.66` gives roughly 66 degrees.
 
 ---
 
-## 🛠️ Installation & Build
+## Build & Run
 
 ### Prerequisites (Ubuntu / WSL)
 
 ```bash
-# Install SDL2 development libraries
-sudo apt update
-sudo apt install -y libsdl2-dev build-essential
+sudo apt install libsdl2-dev build-essential
 ```
 
-### Build & Run
+### Build
 
 ```bash
-# Clone the repository
-git clone https://github.com/<your-username>/nfs-raycaster.git
+git clone https://github.com/skibdiotliet/nfs-raycaster.git
 cd nfs-raycaster
-
-# Build
 make
-
-# Run
-./nfs_raycaster
 ```
 
-### WSL Display Setup
-
-If you're running on **WSL1**, you need an X server:
+### Run
 
 ```bash
-# Install VcXsrv or X410 on Windows, then:
-export DISPLAY=$(ip route show default | awk '{print $3}'):0.0
-
-# For WSL2 with WSLg (Windows 11), it should just work
+./raycaster
 ```
 
-If you're on **WSL2 with WSLg** (default on Windows 11), SDL2 windows should appear automatically — no configuration needed.
+### WSL Display
+
+WSL2 + WSLg (Windows 11) should just work. For older setups:
+
+```bash
+export DISPLAY=$(ip route show default | awk '{print $3}'):0.0
+```
 
 ---
 
-## 🕹️ Controls
+## Controls
 
 | Key | Action |
 |-----|--------|
-| `↑` UP | Accelerate |
-| `↓` DOWN | Brake / Reverse |
-| `←` LEFT | Steer Left |
-| `→` RIGHT | Steer Right |
+| `W` / `↑` | Move forward |
+| `S` / `↓` | Move backward |
+| `A` / `←` | Rotate left |
+| `D` / `→` | Rotate right |
 | `ESC` | Quit |
-| `R` | Restart (after race complete) |
 
 ---
 
-## 🏗️ Architecture Deep-Dive
-
-### File Structure
+## Code Architecture
 
 ```
 nfs-raycaster/
 ├── src/
-│   └── main.c          # Complete game source (~600 lines)
-├── Makefile             # Build system
-└── README.md            # This file
+│   └── main.c       # Entire raycaster (~500 lines)
+├── Makefile          # Build
+└── README.md         # This
 ```
 
-### Core Data Structures
+### Key Functions
 
-#### Segment Definition (`SegDef`)
-```c
-typedef struct {
-    float curve;    // Curvature: positive = right, negative = left
-    float y;        // Elevation at segment start
-} SegDef;
-```
+| Function | What it does |
+|----------|-------------|
+| `cast_ray(x)` | DDA raycast for screen column `x` — wall + floor + ceiling |
+| `cast_floor()` | Floor/ceiling raycasting for one column |
+| `draw_sprites()` | Billboard sprite rendering with Z-buffer |
+| `draw_minimap()` | Top-left map overlay |
+| `gen_textures()` | Procedural wall texture generation |
+| `gen_sprite_textures()` | Procedural sprite texture generation |
 
-Each segment is 200 world units long. The track is 1600 segments — about 3.2 km per lap.
+### The Map
 
-#### Projected Segment (`ProjSeg`)
-```c
-typedef struct {
-    float world_z;     // Z position in world space
-    float scale;       // Perspective scale factor (1/distance)
-    float screen_x;    // Projected X on screen
-    float screen_y;    // Projected Y on screen
-    float screen_w;    // Projected road half-width
-    float clip_y;      // Y-coordinate for occlusion clipping
-} ProjSeg;
-```
-
-The projection math:
-```
-scale    = CAMERA_DEPTH / distance
-screen_x = SCREEN_CENTER + scale * camera_offset
-screen_y = SCREEN_CENTER - scale * (elevation - camera_height)
-screen_w = scale * ROAD_WIDTH
-```
-
-### Rendering Pipeline
-
-```
-1. Build track (once)          →  Generate curve/elevation from sin waves
-2. Project segments (each frame)→  Camera → screen space transform
-3. Accumulate curves           →  Parallax offset for each segment
-4. Draw back-to-front          →  Painter's algorithm
-   a. Grass (full-width quad)
-   b. Road (narrower quad)
-   c. Rumble strips
-   d. Lane markings
-   e. Centre line
-   f. Scenery (trees, posts)
-5. Draw rival cars             →  Position on projected segments
-6. Draw player car             →  Fixed screen position
-7. Draw HUD                    →  Speed, laps, time
-```
-
-### Track Generation
-
-The track is generated procedurally using overlapping sine waves:
+Defined as a 24×24 integer grid in `world_map`:
 
 ```c
-// Gentle right curve
-if (p > 0.02 && p < 0.12) curve = 2.0 * sin((p-0.02)/0.10 * PI);
-
-// Sharp left bend
-if (p > 0.18 && p < 0.30) curve = -3.5 * sin((p-0.18)/0.12 * PI);
-
-// Steep hill
-if (p > 0.45 && p < 0.55) hill = 3000.0 * sin((p-0.45)/0.10 * PI);
+0 = empty space
+1 = red brick wall
+2 = green stone wall
+3 = blue metal wall
 ```
 
-This creates a track with 5 distinct curve sections and 5 elevation changes, giving each lap a unique feel as you go from sweeping bends to tight hairpins and over rolling hills.
-
-### The Curve Illusion
-
-The most important trick in the renderer is **curve accumulation**:
-
-```c
-x_offset += dx;
-dx += track[idx].curve * 0.015;
-```
-
-Each segment's curve value adds a small delta to `dx`, and `dx` itself accumulates into `x_offset`. This means segments farther away get progressively more lateral offset, making the road appear to curve naturally. The curve strength is subtle for near segments and dramatic for far ones — exactly how perspective works.
-
-### Custom Bitmap Font
-
-The game includes a built-in 3×5 pixel font for all HUD text:
-
-```c
-static const uint8_t font[128][5] = {
-    ['A']={0xe,0x11,0x1f,0x11,0x11},
-    // Each number is a 4-bit row: bit 3=leftmost pixel
-};
-```
-
-Each character is defined as 5 rows of 4-bit values, where each bit represents one pixel. This eliminates the need for SDL_ttf and keeps the dependency count at just SDL2.
+Edit it however you want. The raycaster reads it directly.
 
 ---
 
-## 🎯 Modding Guide
+## Modifying
 
-### Change the Track
+### Change the map
 
-Edit `build_track()` in `src/main.c`:
+Edit the `world_map` array. Values 1-3 are different wall types with different textures and colours.
 
-```c
-// Add a crazy chicane (S-curve)
-if (p > 0.50 && p < 0.53) curve = 6.0 * sin(...);  // sharp right
-if (p > 0.53 && p < 0.56) curve = -6.0 * sin(...); // sharp left
-```
+### Add wall types
 
-### Adjust Physics
+1. Add a new value to the map (e.g. `4`)
+2. Add a colour case in `wall_colour()`
+3. Add a texture pattern in `gen_textures()`
 
-At the top of `main.c`:
+### Change FOV
 
 ```c
-#define MAX_SPEED     (SEG_LEN * 60)   // Increase for faster top speed
-#define ACCEL         (MAX_SPEED / 3)   // Higher = quicker acceleration
-#define CENTRIFUGAL   0.3               // Higher = harder to hold curves
-#define STEER_SPEED   3.0               // Higher = more responsive steering
+static double plane_y = 0.66;  // increase = wider FOV, decrease = narrower
 ```
 
-### Add More Rivals
-
-```c
-#define MAX_RIVALS  20   // More traffic!
-```
-
-### Change Resolution
+### Change resolution
 
 ```c
 #define SCREEN_W  1920
 #define SCREEN_H  1080
 ```
 
----
+### Add sprites
 
-## 🔧 Troubleshooting
-
-### "SDL init failed"
-```bash
-sudo apt install libsdl2-dev
+```c
+static Sprite sprites[MAX_SPRITES] = {
+    { 5.5, 5.5, 0 },   // x, y, type
+    // add more...
+};
 ```
 
-### "Could not create window" (WSL)
-Make sure you have a display server:
-- **WSL1**: Install VcXsrv on Windows, set `DISPLAY` environment variable
-- **WSL2 + Windows 11**: WSLg should handle this automatically
-- **WSL2 + Windows 10**: You may need to install an X server
+---
 
-```bash
-# Test if X11 is working
-xdpyinfo 2>/dev/null && echo "X11 OK" || echo "No display"
-```
+## References
 
-### Slow framerate
-- Make sure you have `SDL_RENDERER_ACCELERATED` support
-- Try reducing `DRAW_DIST` from 300 to 200
-- On WSL, software rendering may be used — this is normal
-
-### Segfault on start
-- Ensure `libsdl2-dev` is installed (not just `libsdl2`)
-- Run with `GALLIUM_HUD=fps ./nfs_raycaster` to debug rendering
+- [Lode's Raycasting Tutorial](https://lodev.org/cgtutor/raycasting.html) — the definitive reference
+- [DDA Algorithm Explained](https://en.wikipedia.org/wiki/Digital_differential_analyzer_(graphics_algorithm))
+- [Wolfenstein 3D Source](https://github.com/id-Software/wolf3d) — original id Software code
 
 ---
 
-## 📚 Further Reading
+## License
 
-If you want to understand pseudo-3D racing game development in depth:
-
-- **[Lou's Pseudo 3D Page](http://www.extentofthejam.com/pseudo/)** — The definitive reference for OutRun-style rendering
-- **[Code the Classics](https://wireframe.raspberrypi.com/books/code-the-classics-vol1)** — Raspberry Pi Press book with a Python racer
-- **[OutRun Source Code](https://github.com/brenns10/outrun)** — C++ reimplementation with detailed comments
-- **[Jake Gordon's JavaScript Racer](https://github.com/jakesgordon/javascript-racer)** — Step-by-step tutorial in JavaScript
-
----
-
-## 📝 License
-
-MIT License — use this code for anything you want. Learn from it, mod it, build your own racer on top of it.
-
----
-
-## 🏁 Credits
-
-Built with pure C and SDL2. No game engines were harmed in the making of this racer.
-
-**Now hit the road!**
+MIT

@@ -1,727 +1,504 @@
 /*
- * ========================================================================
- *  NFS RAYCASTER — A Need-for-Speed-style pseudo-3D racing game in C
- * ========================================================================
- *  Uses the classic segment-projection raycasting technique (OutRun style)
- *  to render a road with curves, hills, and rival cars.
+ * ============================================================
+ *  RAYCASTER — True 3D raycasting engine in C
+ * ============================================================
+ *  Wolfenstein-style DDA raycaster. Casts rays through a 2D
+ *  grid map, calculates wall distances per screen column,
+ *  draws textured/floored strips. That's it.
  *
  *  Build:  make
- *  Run:    ./nfs_raycaster
+ *  Run:    ./raycaster
  *
  *  Controls:
- *    UP     — Accelerate
- *    DOWN   — Brake / Reverse
- *    LEFT   — Steer Left
- *    RIGHT  — Steer Right
- *    ESC    — Quit
- * ========================================================================
+ *    W/UP    — Move forward
+ *    S/DOWN  — Move backward
+ *    A/LEFT  — Rotate left
+ *    D/RIGHT — Rotate right
+ *    ESC     — Quit
+ * ============================================================
  */
 
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_image.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
 #include <math.h>
+#include <stdint.h>
 #include <string.h>
-#include <time.h>
 
-/* ── Window & Rendering ─────────────────────────────────────────────── */
-#define SCREEN_W      1024
-#define SCREEN_H      768
-#define ROAD_W        2400      /* logical road width in world units      */
-#define SEG_LEN       200       /* length of one segment                  */
-#define DRAW_DIST     300       /* how many segments to draw ahead        */
-#define CAM_DEPTH     0.84      /* camera depth (field-of-view factor)    */
-#define CAM_H         1200      /* camera height above road               */
+/* ── Window ──────────────────────────────────────────────────────────── */
+#define SCREEN_W  1024
+#define SCREEN_H  768
 
-/* ── Gameplay ────────────────────────────────────────────────────────── */
-#define MAX_SPEED     (SEG_LEN * 60)   /* top speed units/sec            */
-#define ACCEL         (MAX_SPEED / 3)  /* acceleration units/sec^2       */
-#define BRAKE         (MAX_SPEED * 1.5)/* brake deceleration             */
-#define DECEL         (MAX_SPEED / 5)  /* natural slow-down              */
-#define OFF_ROAD_DECEL(MAX_SPEED * 0.8)/* off-road drag                  */
-#define STEER_SPEED   3.0               /* lateral movement factor       */
-#define CENTRIFUGAL   0.3               /* centrifugal pull on curves    */
+/* ── Map ─────────────────────────────────────────────────────────────── */
+#define MAP_W 24
+#define MAP_H 24
 
-/* ── Track ───────────────────────────────────────────────────────────── */
-#define TRACK_SEGS    1600
-#define TRACK_LAPS    3
+static const int world_map[MAP_H][MAP_W] = {
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,2,2,0,0,1},
+    {1,0,0,0,0,0,1,1,0,1,0,0,0,0,0,0,0,0,0,2,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,2,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,2,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,3,3,3,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,3,0,3,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,3,0,3,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,3,0,3,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,3,3,3,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+};
 
-/* ── Colours ─────────────────────────────────────────────────────────── */
-#define SKY_TOP       { 20, 20, 80 }
-#define SKY_BOT       { 140,100,180 }
-#define MOUNT_COL     { 60, 50, 70 }
-#define TREE_TRUNK    { 80, 50, 20 }
-#define TREE_LEAVES   { 20,120, 20 }
-#define GRASS_DARK    { 30,130, 30 }
-#define GRASS_LIGHT   { 40,160, 40 }
-#define ROAD_DARK     { 70, 70, 70 }
-#define ROAD_LIGHT    { 80, 80, 80 }
-#define RUMBLE_DARK   {200, 40, 40 }
-#define RUMBLE_LIGHT  {255,255,255 }
-#define LANE_MARK     {255,255,255 }
-#define HUD_BG        {  0,  0,  0 }
-#define HUD_FG        {255,255,255 }
-#define LAP_COL       {255,220,  0 }
+/* ── Player ──────────────────────────────────────────────────────────── */
+static double pos_x   = 3.5;
+static double pos_y   = 3.5;
+static double dir_x   = 1.0;
+static double dir_y   = 0.0;
+static double plane_x = 0.0;
+static double plane_y = 0.66;   /* camera plane, 66° FOV */
 
-/* ── Segment structure ───────────────────────────────────────────────── */
+/* ── Movement ────────────────────────────────────────────────────────── */
+#define MOVE_SPEED  3.0
+#define ROT_SPEED   2.0
+
+/* ── Wall colours per type ───────────────────────────────────────────── */
+static SDL_Color wall_colour(int type, int side, int shade) {
+    /* shade: 0=bright, 1=dark (for distance fog) */
+    int fog = shade ? 60 : 0;
+    switch (type) {
+        case 1: return (SDL_Color){ 180 - fog,  50 - fog/2,  50 - fog/2}; /* red brick   */
+        case 2: return (SDL_Color){  50 - fog/2, 180 - fog,  50 - fog/2}; /* green stone */
+        case 3: return (SDL_Color){  50 - fog/2,  50 - fog/2, 200 - fog}; /* blue metal  */
+        default: return (SDL_Color){ 150 - fog, 150 - fog, 150 - fog};     /* grey        */
+    }
+}
+
+/* ── Generate a procedural brick texture ─────────────────────────────── */
+#define TEX_SIZE 64
+
 typedef struct {
-    float curve;       /* curvature for this segment          */
-    float y;           /* hill height at segment start        */
-} SegDef;
+    uint32_t pixels[TEX_SIZE * TEX_SIZE];
+} Texture;
+
+static Texture textures[4]; /* one per wall type */
+
+static void gen_textures(void) {
+    for (int t = 0; t < 4; t++) {
+        for (int y = 0; y < TEX_SIZE; y++) {
+            for (int x = 0; x < TEX_SIZE; x++) {
+                uint8_t r, g, b;
+                int mortar = (x % 16 < 1) || (y % 8 < 1);
+                int offset = (y / 8) % 2 ? 8 : 0;  /* stagger bricks */
+
+                if (t == 0) {
+                    /* Red brick */
+                    if (mortar) { r = 120; g = 110; b = 100; }
+                    else { r = 160 + (x*7 + y*13) % 30; g = 60 + (x*3) % 15; b = 50; }
+                } else if (t == 1) {
+                    /* Green stone */
+                    if (mortar) { r = 60; g = 80; b = 60; }
+                    else { r = 40 + (x*11 + y*7) % 20; g = 140 + (x*5 + y*9) % 30; b = 50; }
+                } else if (t == 2) {
+                    /* Blue metal with rivets */
+                    int rivet = ((x-4)%16 < 3 && (y-4)%16 < 3);
+                    if (mortar) { r = 40; g = 40; b = 100; }
+                    else if (rivet) { r = 120; g = 120; b = 200; }
+                    else { r = 50 + (x+y)%10; g = 50 + (x+y)%10; b = 170 + (x*3)%30; }
+                } else {
+                    /* Grey concrete */
+                    if (mortar) { r = 80; g = 80; b = 80; }
+                    else { int v = 130 + (x*17 + y*31) % 25; r = v; g = v; b = v; }
+                }
+                textures[t].pixels[y * TEX_SIZE + x] = (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+}
+
+/* ── Z-buffer for sprite occlusion ───────────────────────────────────── */
+static double z_buffer[SCREEN_W];
+
+/* ── Sprite data ─────────────────────────────────────────────────────── */
+#define MAX_SPRITES 8
 
 typedef struct {
-    float world_z;     /* z position in world                 */
-    float scale;       /* perspective scale                   */
-    float screen_x;    /* projected x                         */
-    float screen_y;    /* projected y                         */
-    float screen_w;    /* projected road half-width           */
-    float clip_y;      /* y clip for occlusion                */
-} ProjSeg;
+    double x;
+    double y;
+    int    type;  /* 0=red barrel, 1=green column, 2=blue pillar */
+} Sprite;
 
-/* ── Rival car ───────────────────────────────────────────────────────── */
-#define MAX_RIVALS  12
+static Sprite sprites[MAX_SPRITES] = {
+    { 5.5,  5.5,  0 },
+    { 10.5, 5.5,  1 },
+    { 15.5, 5.5,  2 },
+    { 7.5,  14.5, 0 },
+    { 12.5, 14.5, 1 },
+    { 17.5, 14.5, 2 },
+    { 4.5,  20.5, 0 },
+    { 20.5, 20.5, 1 },
+};
 
-typedef struct {
-    float z;           /* world z position                    */
-    float x;           /* lateral offset (-1..1 across road)  */
-    float speed;       /* units per second                    */
-    int   colour;      /* 0=red 1=blue 2=yellow 3=green      */
-} Rival;
+/* ── Generate sprite textures ────────────────────────────────────────── */
+#define SPR_TEX_SIZE 64
+static Texture spr_textures[3];
 
-/* ── Game state ──────────────────────────────────────────────────────── */
-static SegDef  track[TRACK_SEGS];
-static ProjSeg proj[DRAW_DIST + 1];
-static Rival   rivals[MAX_RIVALS];
+static void gen_sprite_textures(void) {
+    for (int t = 0; t < 3; t++) {
+        for (int y = 0; y < SPR_TEX_SIZE; y++) {
+            for (int x = 0; x < SPR_TEX_SIZE; x++) {
+                int cx = x - SPR_TEX_SIZE/2;
+                int cy = y - SPR_TEX_SIZE/2;
+                int dist = cx*cx + cy*cy;
+                int radius = (SPR_TEX_SIZE/2 - 4) * (SPR_TEX_SIZE/2 - 4);
+                uint8_t r, g, b, a;
 
-static float player_x   = 0.0f;   /* -1..1 across road              */
-static float player_z   = 0.0f;   /* world z position               */
-static float speed      = 0.0f;   /* current speed                  */
-static int   lap        = 0;
-static float lap_timer  = 0.0f;
-static float best_lap   = 999.99f;
-static float total_time = 0.0f;
-static int   countdown  = 3;       /* 3-2-1-GO countdown             */
-static float countdown_t= 0.0f;
-static int   game_over  = 0;
+                if (dist > radius) {
+                    /* Transparent */
+                    r = g = b = a = 0;
+                } else if (t == 0) {
+                    /* Red barrel */
+                    int stripe = (x / 8) % 2;
+                    if (stripe) { r = 200; g = 40; b = 40; }
+                    else { r = 160; g = 30; b = 30; }
+                    a = 255;
+                } else if (t == 1) {
+                    /* Green column */
+                    r = 30; g = 160 + (x+y)%20; b = 40;
+                    a = 255;
+                } else {
+                    /* Blue pillar */
+                    r = 40; g = 40; b = 180 + (x*3+y*7)%30;
+                    a = 255;
+                }
+                spr_textures[t].pixels[y * SPR_TEX_SIZE + x] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+}
 
+/* ── SDL globals ─────────────────────────────────────────────────────── */
 static SDL_Window   *window   = NULL;
 static SDL_Renderer *renderer = NULL;
-static int  running = 1;
-static Uint64 prev_tick = 0;
+static SDL_Texture  *fb_tex   = NULL;
+static uint32_t      framebuf[SCREEN_W * SCREEN_H];
+static int           running  = 1;
 
-/* ── Helper: clamp ───────────────────────────────────────────────────── */
-static inline float clampf(float v, float lo, float hi) {
-    return v < lo ? lo : v > hi ? hi : v;
+/* ── Set pixel in framebuffer ────────────────────────────────────────── */
+static inline void set_pixel(int x, int y, uint32_t col) {
+    if (x >= 0 && x < SCREEN_W && y >= 0 && y < SCREEN_H)
+        framebuf[y * SCREEN_W + x] = col;
 }
 
-/* ── Build the track ─────────────────────────────────────────────────── */
-static void build_track(void) {
-    float y = 0;
-    for (int i = 0; i < TRACK_SEGS; i++) {
-        float p = (float)i / TRACK_SEGS;
+/* ── Floor casting ───────────────────────────────────────────────────── */
+static void cast_floor(double ray_dir_x0, double ray_dir_y0,
+                       double ray_dir_x1, double ray_dir_y1,
+                       int draw_end, int x) {
+    for (int y = draw_end + 1; y < SCREEN_H; y++) {
+        /* Current y vs centre of screen */
+        int p = y - SCREEN_H / 2;
+        if (p == 0) continue;
 
-        /* Curves — sin waves of different frequencies */
-        float curve = 0;
-        if (p > 0.02f && p < 0.12f) curve =  2.0f * sinf((p-0.02f)/0.10f * M_PI);
-        if (p > 0.18f && p < 0.30f) curve = -3.5f * sinf((p-0.18f)/0.12f * M_PI);
-        if (p > 0.38f && p < 0.50f) curve =  4.0f * sinf((p-0.38f)/0.12f * M_PI);
-        if (p > 0.58f && p < 0.68f) curve = -2.5f * sinf((p-0.58f)/0.10f * M_PI);
-        if (p > 0.75f && p < 0.88f) curve =  3.0f * sinf((p-0.75f)/0.13f * M_PI);
+        /* Vertical distance from player to floor for current row */
+        double row_dist = 0.5 * SCREEN_H / (double)p;
 
-        /* Hills — elevation changes */
-        float hill = 0;
-        if (p > 0.05f && p < 0.15f) hill =  2500.0f * sinf((p-0.05f)/0.10f * M_PI);
-        if (p > 0.25f && p < 0.35f) hill = -1500.0f * sinf((p-0.25f)/0.10f * M_PI);
-        if (p > 0.45f && p < 0.55f) hill =  3000.0f * sinf((p-0.45f)/0.10f * M_PI);
-        if (p > 0.65f && p < 0.78f) hill = -2000.0f * sinf((p-0.65f)/0.13f * M_PI);
-        if (p > 0.85f && p < 0.95f) hill =  1800.0f * sinf((p-0.85f)/0.10f * M_PI);
+        /* Real world step between each pixel */
+        double floor_step_x = row_dist * (ray_dir_x1 - ray_dir_x0) / SCREEN_W;
+        double floor_step_y = row_dist * (ray_dir_y1 - ray_dir_y0) / SCREEN_W;
 
-        y += hill * 0.005f;
-        track[i].curve = curve;
-        track[i].y     = y;
-    }
-}
+        /* Starting floor position */
+        double floor_x = pos_x + row_dist * ray_dir_x0;
+        double floor_y = pos_y + row_dist * ray_dir_y0;
 
-/* ── Place rival cars ────────────────────────────────────────────────── */
-static void init_rivals(void) {
-    for (int i = 0; i < MAX_RIVALS; i++) {
-        rivals[i].z      = (float)(i + 1) * (TRACK_SEGS * SEG_LEN) / (MAX_RIVALS + 1);
-        rivals[i].x      = (float)(rand() % 160 - 80) / 100.0f;
-        rivals[i].speed  = MAX_SPEED * (0.30f + 0.40f * (float)rand() / RAND_MAX);
-        rivals[i].colour = i % 4;
-    }
-}
+        /* Step along the floor */
+        floor_x += floor_step_x * x;
+        floor_y += floor_step_y * x;
 
-/* ── Project a segment ───────────────────────────────────────────────── */
-static void project_segment(ProjSeg *ps, float cam_x, float cam_y, float cam_z,
-                            float seg_z, float seg_y) {
-    ps->world_z = seg_z;
-    float dz = seg_z - cam_z;
-    if (dz <= 0) dz = 0.001f;
-    ps->scale    = CAM_DEPTH / dz;
-    ps->screen_x = SCREEN_W * 0.5f + ps->scale * (CAM_H * (-cam_x)) * SCREEN_W * 0.5f;
-    ps->screen_y = SCREEN_H * 0.5f - ps->scale * ((seg_y - cam_y) - CAM_H) * SCREEN_H * 0.5f;
-    ps->screen_w = ps->scale * ROAD_W * SCREEN_W * 0.5f;
-}
+        /* Tile coordinate */
+        int tx = (int)floor_x & (TEX_SIZE - 1);
+        int ty = (int)floor_y & (TEX_SIZE - 1);
 
-/* ── Draw a filled polygon ───────────────────────────────────────────── */
-static void draw_quad(SDL_Renderer *r, SDL_Color c,
-                      float x1, float y1, float w1,
-                      float x2, float y2, float w2) {
-    SDL_SetRenderDrawColor(r, c.r, c.g, c.b, 255);
-    float lx1 = x1 - w1, rx1 = x1 + w1;
-    float lx2 = x2 - w2, rx2 = x2 + w2;
-    /* Simple scanline fill — draw horizontal lines from top to bottom */
-    int top = (int)y1, bot = (int)y2;
-    if (bot < top) { int t = top; top = bot; bot = t; }
-    if (bot < 0 || top >= SCREEN_H) return;
-    if (top < 0)  top = 0;
-    if (bot >= SCREEN_H) bot = SCREEN_H - 1;
-    for (int row = top; row <= bot; row++) {
-        float t = (y2 == y1) ? 0.5f : (row - y1) / (y2 - y1);
-        float lx = lx1 + (lx2 - lx1) * t;
-        float rx = rx1 + (rx2 - rx1) * t;
-        SDL_RenderDrawLine(r, (int)lx, row, (int)rx, row);
-    }
-}
-
-/* ── Draw a simple car sprite ────────────────────────────────────────── */
-static void draw_car(SDL_Renderer *r, float cx, float cy, float scale, int colour) {
-    float w = 50 * scale;
-    float h = 80 * scale;
-    if (w < 2 || h < 3) return;
-
-    SDL_Color body;
-    switch (colour) {
-        case 0: body = (SDL_Color){220, 30, 30}; break;  /* red    */
-        case 1: body = (SDL_Color){ 30, 30,220}; break;  /* blue   */
-        case 2: body = (SDL_Color){220,200, 30}; break;  /* yellow */
-        case 3: body = (SDL_Color){ 30,180, 30}; break;  /* green  */
-        default: body = (SDL_Color){200,200,200}; break;
-    }
-
-    /* Body */
-    SDL_SetRenderDrawColor(r, body.r, body.g, body.b, 255);
-    SDL_Rect rect = { (int)(cx - w/2), (int)(cy - h), (int)w, (int)h };
-    SDL_RenderFillRect(r, &rect);
-
-    /* Windshield */
-    SDL_SetRenderDrawColor(r, 150, 200, 255, 255);
-    float ws_h = h * 0.25f;
-    SDL_Rect ws = { (int)(cx - w*0.35f), (int)(cy - h*0.75f),
-                    (int)(w*0.7f), (int)ws_h };
-    SDL_RenderFillRect(r, &ws);
-
-    /* Wheels */
-    SDL_SetRenderDrawColor(r, 30, 30, 30, 255);
-    float ww = w * 0.2f, wh = h * 0.2f;
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(cx - w/2 - ww*0.5f), (int)(cy - h*0.8f), (int)ww, (int)wh });
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(cx + w/2 - ww*0.5f), (int)(cy - h*0.8f), (int)ww, (int)wh });
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(cx - w/2 - ww*0.5f), (int)(cy - h*0.25f), (int)ww, (int)wh });
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(cx + w/2 - ww*0.5f), (int)(cy - h*0.25f), (int)ww, (int)wh });
-}
-
-/* ── Draw the player's car ───────────────────────────────────────────── */
-static void draw_player_car(SDL_Renderer *r, float steer) {
-    float cx = SCREEN_W * 0.5f;
-    float cy = SCREEN_H - 20;
-    float w  = 60, h = 100;
-
-    /* Slight tilt based on steering */
-    float tilt = steer * 15.0f;
-
-    /* Shadow */
-    SDL_SetRenderDrawColor(r, 20, 20, 20, 128);
-    SDL_Rect shadow = { (int)(cx - w/2 + 5), (int)(cy - h + 5), (int)w, (int)h };
-    SDL_RenderFillRect(r, &shadow);
-
-    /* Body — sleek racer shape */
-    SDL_SetRenderDrawColor(r, 255, 140, 0, 255);  /* orange NFS style */
-    SDL_Rect body = { (int)(cx - w/2 + tilt*0.3f), (int)(cy - h), (int)w, (int)h };
-    SDL_RenderFillRect(r, &body);
-
-    /* Hood detail */
-    SDL_SetRenderDrawColor(r, 200, 100, 0, 255);
-    SDL_Rect hood = { (int)(cx - w*0.35f + tilt*0.3f), (int)(cy - h*0.55f), (int)(w*0.7f), (int)(h*0.3f) };
-    SDL_RenderFillRect(r, &hood);
-
-    /* Windshield */
-    SDL_SetRenderDrawColor(r, 100, 180, 255, 255);
-    SDL_Rect ws = { (int)(cx - w*0.3f + tilt*0.2f), (int)(cy - h*0.72f), (int)(w*0.6f), (int)(h*0.18f) };
-    SDL_RenderFillRect(r, &ws);
-
-    /* Racing stripe */
-    SDL_SetRenderDrawColor(r, 40, 40, 40, 255);
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(cx - 4 + tilt*0.3f), (int)(cy - h), 8, (int)h });
-
-    /* Wheels */
-    SDL_SetRenderDrawColor(r, 30, 30, 30, 255);
-    float ww = w * 0.18f, wh = h * 0.18f;
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(cx - w/2 - ww*0.6f + tilt*0.4f), (int)(cy - h*0.85f), (int)ww, (int)wh });
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(cx + w/2 - ww*0.4f + tilt*0.4f), (int)(cy - h*0.85f), (int)ww, (int)wh });
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(cx - w/2 - ww*0.6f), (int)(cy - h*0.2f), (int)ww, (int)wh });
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(cx + w/2 - ww*0.4f), (int)(cy - h*0.2f), (int)ww, (int)wh });
-
-    /* Tail lights */
-    SDL_SetRenderDrawColor(r, 255, 0, 0, 255);
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(cx - w*0.4f), (int)(cy - 6), 8, 5 });
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(cx + w*0.4f - 8), (int)(cy - 6), 8, 5 });
-}
-
-/* ── Draw scenery (trees / posts) ────────────────────────────────────── */
-static void draw_tree(SDL_Renderer *r, float x, float y, float scale) {
-    float tw = 12 * scale, th = 40 * scale;
-    float lw = 50 * scale, lh = 60 * scale;
-    if (th < 2 || lh < 2) return;
-
-    /* Trunk */
-    SDL_SetRenderDrawColor(r, TREE_TRUNK.r, TREE_TRUNK.g, TREE_TRUNK.b, 255);
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(x - tw/2), (int)(y - th), (int)tw, (int)th });
-
-    /* Canopy */
-    SDL_SetRenderDrawColor(r, TREE_LEAVES.r, TREE_LEAVES.g, TREE_LEAVES.b, 255);
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(x - lw/2), (int)(y - th - lh), (int)lw, (int)lh });
-}
-
-static void draw_post(SDL_Renderer *r, float x, float y, float scale) {
-    float pw = 6 * scale, ph = 80 * scale;
-    if (ph < 2) return;
-    SDL_SetRenderDrawColor(r, 180, 180, 180, 255);
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(x - pw/2), (int)(y - ph), (int)pw, (int)ph });
-    SDL_SetRenderDrawColor(r, 255, 50, 50, 255);
-    SDL_RenderFillRect(r, &(SDL_Rect){ (int)(x - pw), (int)(y - ph), (int)(pw*2), (int)(8*scale) });
-}
-
-/* ── HUD drawing ─────────────────────────────────────────────────────── */
-static void draw_hud(SDL_Renderer *r, float spd, int current_lap, float lap_t, float best, float total) {
-    char buf[128];
-
-    /* Background bar */
-    SDL_SetRenderDrawColor(r, 0, 0, 0, 180);
-    SDL_Rect hud_bg = { 0, 0, SCREEN_W, 50 };
-    SDL_RenderFillRect(r, &hud_bg);
-
-    /* Speed */
-    int kph = (int)(spd / MAX_SPEED * 320);
-    snprintf(buf, sizeof(buf), "SPEED: %3d km/h", kph);
-    SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
-    /* We'll draw text as simple shapes — use a small helper below */
-
-    /* Speed bar */
-    float bar_w = 200.0f * (spd / MAX_SPEED);
-    SDL_SetRenderDrawColor(r, 0, 255, 0, 255);
-    SDL_RenderFillRect(r, &(SDL_Rect){ 20, 15, (int)bar_w, 20 });
-    SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
-    SDL_RenderDrawRect(r, &(SDL_Rect){ 20, 15, 200, 20 });
-
-    /* Lap info */
-    snprintf(buf, sizeof(buf), "LAP %d/%d", current_lap, TRACK_LAPS);
-    /* Position indicator */
-    snprintf(buf, sizeof(buf), "BEST: %.2fs", best);
-
-    /* Tachometer-style RPM indicator */
-    float rpm_pct = spd / MAX_SPEED;
-    SDL_SetRenderDrawColor(r, 255, 50, 50, 255);
-    if (rpm_pct > 0.8f) {
-        SDL_SetRenderDrawColor(r, 255, 0, 0, 255);
-    } else if (rpm_pct > 0.6f) {
-        SDL_SetRenderDrawColor(r, 255, 200, 0, 255);
-    }
-    SDL_RenderFillRect(r, &(SDL_Rect){ 240, 15, (int)(100 * rpm_pct), 20 });
-    SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
-    SDL_RenderDrawRect(r, &(SDL_Rect){ 240, 15, 100, 20 });
-}
-
-/* ── Draw text using SDL2 built-in ───────────────────────────────────── */
-static SDL_Texture* make_text_texture(SDL_Renderer *r, const char *text,
-                                       SDL_Color fg, int size) {
-    /* We use a simple bitmap approach — draw characters as rectangles */
-    /* For proper text we'd need SDL_ttf, but let's keep dependencies minimal */
-    return NULL;  /* Placeholder — we'll draw HUD with shapes only */
-}
-
-static void draw_text_simple(SDL_Renderer *r, const char *text,
-                              int x, int y, SDL_Color col, int scale) {
-    /* 3x5 pixel font — each char is 3 wide, 5 tall */
-    static const uint8_t font[128][5] = {
-        ['0']={0xe,0x11,0x13,0x15,0xe}, ['1']={0x4,0xc,0x4,0x4,0xe},
-        ['2']={0xe,0x11,0x2,0x4,0x1f}, ['3']={0xe,0x11,0x6,0x11,0xe},
-        ['4']={0x12,0x14,0x1f,0x10,0x10},['5']={0x1f,0x1,0x1f,0x10,0x1f},
-        ['6']={0xe,0x1,0x1f,0x11,0xe}, ['7']={0x1f,0x10,0x8,0x4,0x4},
-        ['8']={0xe,0x11,0xe,0x11,0xe}, ['9']={0xe,0x11,0x1e,0x10,0xe},
-        ['A']={0xe,0x11,0x1f,0x11,0x11},['B']={0x1e,0x11,0x1e,0x11,0x1e},
-        ['C']={0xe,0x11,0x1,0x11,0xe}, ['D']={0x1e,0x11,0x11,0x11,0x1e},
-        ['E']={0x1f,0x1,0x1f,0x1,0x1f},['F']={0x1f,0x1,0x1f,0x1,0x1},
-        ['G']={0xe,0x1,0x17,0x11,0xe}, ['H']={0x11,0x11,0x1f,0x11,0x11},
-        ['I']={0xe,0x4,0x4,0x4,0xe},  ['K']={0x11,0x12,0x1c,0x12,0x11},
-        ['L']={0x1,0x1,0x1,0x1,0x1f}, ['M']={0x11,0x1b,0x15,0x11,0x11},
-        ['N']={0x11,0x19,0x15,0x13,0x11},['O']={0xe,0x11,0x11,0x11,0xe},
-        ['P']={0x1f,0x11,0x1f,0x1,0x1},['R']={0x1e,0x11,0x1e,0x12,0x11},
-        ['S']={0xe,0x1,0xe,0x10,0xe}, ['T']={0x1f,0x4,0x4,0x4,0x4},
-        ['U']={0x11,0x11,0x11,0x11,0xe},['V']={0x11,0x11,0x11,0xa,0x4},
-        ['W']={0x11,0x11,0x15,0x1b,0x11},['X']={0x11,0xa,0x4,0xa,0x11},
-        ['Y']={0x11,0xa,0x4,0x4,0x4}, ['Z']={0x1f,0x10,0x8,0x4,0x1f},
-        [':']={0x0,0x4,0x0,0x4,0x0},  ['/']={0x10,0x8,0x4,0x2,0x1},
-        [' ']={0x0,0x0,0x0,0x0,0x0},  ['.']={0x0,0x0,0x0,0x0,0x4},
-        ['-']={0x0,0x0,0xe,0x0,0x0},  ['s']={0x0,0xe,0x1,0x1e,0xe},
-    };
-    SDL_SetRenderDrawColor(r, col.r, col.g, col.b, 255);
-    for (const char *c = text; *c; c++) {
-        int idx = (unsigned char)*c;
-        if (idx < 0 || idx >= 128 || font[idx][0] == 0 && *c != ' ' && *c != '0') {
-            x += 4 * scale;
-            continue;
+        /* Checkerboard floor */
+        int checker = ((int)floor_x + (int)floor_y) & 1;
+        uint32_t fcol;
+        if (checker) {
+            fcol = textures[3].pixels[ty * TEX_SIZE + tx]; /* grey tile */
+        } else {
+            fcol = textures[3].pixels[ty * TEX_SIZE + tx] & 0x00FEFEFE; /* darkened */
         }
-        for (int row = 0; row < 5; row++) {
-            uint8_t bits = font[idx][row];
-            for (int col = 0; col < 4; col++) {
-                if (bits & (0x10 >> col)) {
-                    SDL_RenderFillRect(r, &(SDL_Rect){
-                        x + col * scale,
-                        y + row * scale,
-                        scale, scale
-                    });
+
+        /* Ceiling (mirror) */
+        int ceil_y = SCREEN_H - y - 1;
+
+        /* Simple ceiling colour */
+        int fog = (int)(row_dist * 12);
+        if (fog > 100) fog = 100;
+        uint8_t cr = 40 - fog/3; if (cr > 40) cr = 0;
+        uint8_t cg = 40 - fog/3; if (cg > 40) cg = 0;
+        uint8_t cb = 60 - fog/2; if (cb > 60) cb = 0;
+        uint32_t ccol = (cr << 16) | (cg << 8) | cb;
+
+        set_pixel(x, y, fcol);
+        set_pixel(x, ceil_y, ccol);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ *  RAYCAST — the core DDA algorithm for one screen column
+ * ═══════════════════════════════════════════════════════════════════════ */
+static void cast_ray(int x) {
+    /* Camera x coordinate: -1 (left) to +1 (right) */
+    double camera_x = 2.0 * x / (double)SCREEN_W - 1.0;
+
+    /* Ray direction */
+    double ray_dir_x = dir_x + plane_x * camera_x;
+    double ray_dir_y = dir_y + plane_y * camera_x;
+
+    /* Grid cell */
+    int map_x = (int)pos_x;
+    int map_y = (int)pos_y;
+
+    /* Delta dist: length of ray from one side of grid to the other */
+    double delta_dist_x = (ray_dir_x == 0) ? 1e30 : fabs(1.0 / ray_dir_x);
+    double delta_dist_y = (ray_dir_y == 0) ? 1e30 : fabs(1.0 / ray_dir_y);
+
+    /* Step direction and initial side distance */
+    int    step_x, step_y;
+    double side_dist_x, side_dist_y;
+
+    if (ray_dir_x < 0) {
+        step_x      = -1;
+        side_dist_x = (pos_x - map_x) * delta_dist_x;
+    } else {
+        step_x      = 1;
+        side_dist_x = (map_x + 1.0 - pos_x) * delta_dist_x;
+    }
+    if (ray_dir_y < 0) {
+        step_y      = -1;
+        side_dist_y = (pos_y - map_y) * delta_dist_y;
+    } else {
+        step_y      = 1;
+        side_dist_y = (map_y + 1.0 - pos_y) * delta_dist_y;
+    }
+
+    /* DDA — march through grid until we hit a wall */
+    int hit  = 0;
+    int side = 0; /* 0 = NS wall, 1 = EW wall */
+
+    while (!hit) {
+        if (side_dist_x < side_dist_y) {
+            side_dist_x += delta_dist_x;
+            map_x       += step_x;
+            side         = 0;
+        } else {
+            side_dist_y += delta_dist_y;
+            map_y       += step_y;
+            side         = 1;
+        }
+        if (map_x < 0 || map_x >= MAP_W || map_y < 0 || map_y >= MAP_H) break;
+        if (world_map[map_y][map_x] > 0) hit = 1;
+    }
+
+    /* Perpendicular distance (avoids fisheye) */
+    double perp_dist;
+    if (side == 0)
+        perp_dist = side_dist_x - delta_dist_x;
+    else
+        perp_dist = side_dist_y - delta_dist_y;
+
+    if (perp_dist < 0.001) perp_dist = 0.001;
+
+    /* Height of wall strip */
+    int line_h = (int)(SCREEN_H / perp_dist);
+
+    /* Draw start/end */
+    int draw_start = -line_h / 2 + SCREEN_H / 2;
+    if (draw_start < 0) draw_start = 0;
+    int draw_end = line_h / 2 + SCREEN_H / 2;
+    if (draw_end >= SCREEN_H) draw_end = SCREEN_H - 1;
+
+    /* Wall texture X coordinate (where on the wall did we hit?) */
+    double wall_x;
+    if (side == 0)
+        wall_x = pos_y + perp_dist * ray_dir_y;
+    else
+        wall_x = pos_x + perp_dist * ray_dir_x;
+    wall_x -= floor(wall_x);
+
+    /* Texture column */
+    int tex_x = (int)(wall_x * (double)TEX_SIZE);
+    if (side == 0 && ray_dir_x > 0) tex_x = TEX_SIZE - tex_x - 1;
+    if (side == 1 && ray_dir_y < 0) tex_x = TEX_SIZE - tex_x - 1;
+
+    /* Get wall type */
+    int wall_type = 0;
+    if (map_x >= 0 && map_x < MAP_W && map_y >= 0 && map_y < MAP_H)
+        wall_type = world_map[map_y][map_x];
+
+    int tex_idx = wall_type - 1;
+    if (tex_idx < 0 || tex_idx > 3) tex_idx = 3;
+
+    /* Draw textured wall column */
+    double step = (double)TEX_SIZE / (double)line_h;
+    double tex_pos = (draw_start - SCREEN_H / 2.0 + line_h / 2.0) * step;
+
+    for (int y = draw_start; y <= draw_end; y++) {
+        int tex_y = (int)tex_pos & (TEX_SIZE - 1);
+        tex_pos += step;
+
+        uint32_t col = textures[tex_idx].pixels[tex_y * TEX_SIZE + tex_x];
+
+        /* Darken EW-facing walls */
+        if (side == 1) {
+            uint8_t r = (col >> 16) & 0xFF;
+            uint8_t g = (col >> 8)  & 0xFF;
+            uint8_t b =  col        & 0xFF;
+            r = r * 2 / 3;
+            g = g * 2 / 3;
+            b = b * 2 / 3;
+            col = (r << 16) | (g << 8) | b;
+        }
+
+        /* Distance fog */
+        int fog = (int)(perp_dist * 18);
+        if (fog > 150) fog = 150;
+        uint8_t r = ((col >> 16) & 0xFF) - fog;
+        uint8_t g = ((col >> 8)  & 0xFF) - fog;
+        uint8_t b = ( col        & 0xFF) - fog;
+        set_pixel(x, y, (r << 16) | (g << 8) | b);
+    }
+
+    /* Floor and ceiling */
+    cast_floor(ray_dir_x, ray_dir_y,
+               dir_x - plane_x, dir_y - plane_y,
+               draw_end, x);
+
+    /* Store in z-buffer for sprite occlusion */
+    z_buffer[x] = perp_dist;
+}
+
+/* ── Draw sprites ────────────────────────────────────────────────────── */
+static void draw_sprites(void) {
+    /* Sort sprites by distance (far first) */
+    double dist[MAX_SPRITES];
+    int    order[MAX_SPRITES];
+    for (int i = 0; i < MAX_SPRITES; i++) {
+        order[i] = i;
+        dist[i] = (pos_x - sprites[i].x) * (pos_x - sprites[i].x)
+                + (pos_y - sprites[i].y) * (pos_y - sprites[i].y);
+    }
+    /* Simple bubble sort */
+    for (int i = 0; i < MAX_SPRITES - 1; i++) {
+        for (int j = i + 1; j < MAX_SPRITES; j++) {
+            if (dist[i] < dist[j]) {
+                double td = dist[i]; dist[i] = dist[j]; dist[j] = td;
+                int    to = order[i]; order[i] = order[j]; order[j] = to;
+            }
+        }
+    }
+
+    for (int i = 0; i < MAX_SPRITES; i++) {
+        Sprite *sp = &sprites[order[i]];
+
+        /* Translate relative to camera */
+        double sx = sp->x - pos_x;
+        double sy = sp->y - pos_y;
+
+        /* Inverse camera matrix transform */
+        double inv_det = 1.0 / (plane_x * dir_y - dir_x * plane_y);
+        double transform_x = inv_det * (dir_y * sx - dir_x * sy);
+        double transform_y = inv_det * (-plane_y * sx + plane_x * sy);
+
+        if (transform_y <= 0.1) continue; /* behind camera */
+
+        int sprite_screen_x = (int)((SCREEN_W / 2.0) * (1.0 + transform_x / transform_y));
+
+        /* Sprite dimensions on screen */
+        int sprite_h = abs((int)(SCREEN_H / transform_y));
+        int draw_start_y = -sprite_h / 2 + SCREEN_H / 2;
+        if (draw_start_y < 0) draw_start_y = 0;
+        int draw_end_y = sprite_h / 2 + SCREEN_H / 2;
+        if (draw_end_y >= SCREEN_H) draw_end_y = SCREEN_H - 1;
+
+        int sprite_w = abs((int)(SCREEN_H / transform_y));
+        int draw_start_x = -sprite_w / 2 + sprite_screen_x;
+        if (draw_start_x < 0) draw_start_x = 0;
+        int draw_end_x = sprite_w / 2 + sprite_screen_x;
+        if (draw_end_x >= SCREEN_W) draw_end_x = SCREEN_W - 1;
+
+        /* Draw sprite columns */
+        Texture *stex = &spr_textures[sp->type];
+        for (int stripe = draw_start_x; stripe < draw_end_x; stripe++) {
+            int tex_x = (int)((stripe - (-sprite_w / 2 + sprite_screen_x))
+                              * (double)SPR_TEX_SIZE / sprite_w);
+            if (tex_x < 0 || tex_x >= SPR_TEX_SIZE) continue;
+            if (transform_y < z_buffer[stripe]) {
+                for (int y = draw_start_y; y < draw_end_y; y++) {
+                    int d = y * 2 - SCREEN_H + sprite_h;
+                    int tex_y = (int)((d * (double)SPR_TEX_SIZE) / sprite_h / 2.0);
+                    if (tex_y < 0 || tex_y >= SPR_TEX_SIZE) continue;
+                    uint32_t col = stex->pixels[tex_y * SPR_TEX_SIZE + tex_x];
+                    uint8_t a = (col >> 24) & 0xFF;
+                    if (a > 128) {
+                        set_pixel(stripe, y, col & 0x00FFFFFF);
+                    }
                 }
             }
         }
-        x += 4 * scale;
     }
 }
 
-/* ── Draw sky gradient ───────────────────────────────────────────────── */
-static void draw_sky(SDL_Renderer *r) {
-    SDL_Color top = SKY_TOP;
-    SDL_Color bot = SKY_BOT;
-    for (int y = 0; y < SCREEN_H / 2; y++) {
-        float t = (float)y / (SCREEN_H / 2);
-        SDL_Color c = {
-            (uint8_t)(top.r + (bot.r - top.r) * t),
-            (uint8_t)(top.g + (bot.g - top.g) * t),
-            (uint8_t)(top.b + (bot.b - top.b) * t)
-        };
-        SDL_SetRenderDrawColor(r, c.r, c.g, c.b, 255);
-        SDL_RenderDrawLine(r, 0, y, SCREEN_W, y);
-    }
-}
+/* ── Draw minimap ────────────────────────────────────────────────────── */
+static void draw_minimap(void) {
+    int scale = 8;
+    int ox = 10, oy = 10;
 
-/* ── Draw mountains ──────────────────────────────────────────────────── */
-static void draw_mountains(SDL_Renderer *r) {
-    SDL_Color mc = MOUNT_COL;
-    SDL_SetRenderDrawColor(r, mc.r, mc.g, mc.b, 255);
-    int base = SCREEN_H / 2;
-    for (int x = 0; x < SCREEN_W; x++) {
-        float h1 = sinf(x * 0.005f) * 60;
-        float h2 = sinf(x * 0.012f + 2.0f) * 30;
-        float h3 = sinf(x * 0.003f + 5.0f) * 40;
-        int peak = base - (int)(h1 + h2 + h3) - 30;
-        SDL_RenderDrawLine(r, x, peak, x, base);
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
- *  MAIN RENDER — the raycaster core
- * ═══════════════════════════════════════════════════════════════════════ */
-static void render(SDL_Renderer *r) {
-    float track_len = TRACK_SEGS * SEG_LEN;
-
-    /* Camera */
-    int   base_seg  = (int)(player_z / SEG_LEN) % TRACK_SEGS;
-    float base_pct  = fmodf(player_z, SEG_LEN) / SEG_LEN;
-    float cam_z     = player_z;
-    float cam_y     = track[base_seg].y + (track[(base_seg+1)%TRACK_SEGS].y - track[base_seg].y) * base_pct;
-
-    /* Accumulated curve for parallax */
-    float x_offset = 0;
-    float dx       = 0;
-
-    /* ── Sky ──────────────────────────────────────────────────────────── */
-    draw_sky(r);
-    draw_mountains(r);
-
-    /* ── Project all visible segments ─────────────────────────────────── */
-    for (int n = 0; n <= DRAW_DIST; n++) {
-        int idx = (base_seg + n) % TRACK_SEGS;
-        float seg_z = (base_seg + n) * SEG_LEN;
-        if (seg_z < cam_z) seg_z += track_len;
-
-        float seg_y = track[idx].y;
-        project_segment(&proj[n], player_x * ROAD_W * 0.5f, cam_y, cam_z, seg_z, seg_y);
-
-        /* Apply curve offset */
-        proj[n].screen_x += x_offset;
-        x_offset += dx;
-        dx += track[idx].curve * 0.015f;
-
-        /* Clip */
-        proj[n].clip_y = SCREEN_H;
-    }
-
-    /* ── Draw road from far to near ───────────────────────────────────── */
-    for (int n = DRAW_DIST - 1; n > 0; n--) {
-        ProjSeg *p1 = &proj[n];     /* far */
-        ProjSeg *p2 = &proj[n - 1]; /* near */
-
-        if (p1->screen_y >= p2->clip_y && p2->screen_y >= p1->clip_y) continue;
-
-        int idx = (base_seg + n) % TRACK_SEGS;
-        int alt = ((base_seg + n) / 3) % 2;
-
-        /* Grass */
-        SDL_Color gc = alt ? GRASS_LIGHT : GRASS_DARK;
-        draw_quad(r, gc,
-                  0, p1->screen_y, SCREEN_W,
-                  0, p2->screen_y, SCREEN_W);
-
-        /* Road */
-        SDL_Color rc = alt ? ROAD_LIGHT : ROAD_DARK;
-        draw_quad(r, rc,
-                  p1->screen_x, p1->screen_y, p1->screen_w,
-                  p2->screen_x, p2->screen_y, p2->screen_w);
-
-        /* Rumble strips */
-        SDL_Color rumc = alt ? RUMBLE_LIGHT : RUMBLE_DARK;
-        float rw1 = p1->screen_w * 1.15f, rw2 = p2->screen_w * 1.15f;
-        draw_quad(r, rumc,
-                  p1->screen_x, p1->screen_y, rw1,
-                  p2->screen_x, p2->screen_y, rw2);
-        /* Re-draw road on top of rumble inner */
-        draw_quad(r, rc,
-                  p1->screen_x, p1->screen_y, p1->screen_w,
-                  p2->screen_x, p2->screen_y, p2->screen_w);
-
-        /* Lane markings */
-        if (alt) {
-            float lw1 = p1->screen_w * 0.01f;
-            float lw2 = p2->screen_w * 0.01f;
-            for (int lane = -1; lane <= 1; lane++) {
-                float off1 = p1->screen_w * lane * 0.33f;
-                float off2 = p2->screen_w * lane * 0.33f;
-                draw_quad(r, LANE_MARK,
-                          p1->screen_x + off1, p1->screen_y, lw1,
-                          p2->screen_x + off2, p2->screen_y, lw2);
+    for (int my = 0; my < MAP_H; my++) {
+        for (int mx = 0; mx < MAP_W; mx++) {
+            uint32_t col;
+            if (world_map[my][mx] > 0) {
+                switch (world_map[my][mx]) {
+                    case 1: col = 0x00B43232; break;
+                    case 2: col = 0x0032B432; break;
+                    case 3: col = 0x003232C8; break;
+                    default: col = 0x00969696; break;
+                }
+            } else {
+                col = 0x00181818;
             }
-        }
-
-        /* Centre line */
-        if (!alt) {
-            float cw1 = p1->screen_w * 0.015f;
-            float cw2 = p2->screen_w * 0.015f;
-            draw_quad(r, LANE_MARK,
-                      p1->screen_x, p1->screen_y, cw1,
-                      p2->screen_x, p2->screen_y, cw2);
-        }
-
-        /* ── Scenery ──────────────────────────────────────────────────── */
-        if (n % 8 == 0) {
-            /* Trees on both sides */
-            float tree_x_left  = p2->screen_x - p2->screen_w * 1.8f;
-            float tree_x_right = p2->screen_x + p2->screen_w * 1.8f;
-            float tree_scale   = p2->scale * 800.0f;
-            draw_tree(r, tree_x_left,  p2->screen_y, tree_scale);
-            draw_tree(r, tree_x_right, p2->screen_y, tree_scale);
-        }
-
-        /* Roadside posts every 4 segments */
-        if (n % 4 == 0) {
-            float post_scale = p2->scale * 600.0f;
-            draw_post(r, p2->screen_x - p2->screen_w * 1.2f, p2->screen_y, post_scale);
-            draw_post(r, p2->screen_x + p2->screen_w * 1.2f, p2->screen_y, post_scale);
-        }
-
-        /* Update clip */
-        if (p2->screen_y < proj[n-1].clip_y) {
-            proj[n-1].clip_y = p2->screen_y;
+            for (int py = 0; py < scale - 1; py++)
+                for (int px = 0; px < scale - 1; px++)
+                    set_pixel(ox + mx * scale + px, oy + my * scale + py, col);
         }
     }
 
-    /* ── Rival cars ───────────────────────────────────────────────────── */
-    for (int i = 0; i < MAX_RIVALS; i++) {
-        float rel_z = rivals[i].z - player_z;
-        if (rel_z < 0) rel_z += track_len;
-        if (rel_z > DRAW_DIST * SEG_LEN || rel_z < SEG_LEN) continue;
+    /* Player dot */
+    int px = ox + (int)(pos_x * scale);
+    int py = oy + (int)(pos_y * scale);
+    for (int dy = -2; dy <= 2; dy++)
+        for (int dx = -2; dx <= 2; dx++)
+            set_pixel(px + dx, py + dy, 0x00FFFF00);
 
-        int seg_n = (int)(rel_z / SEG_LEN);
-        if (seg_n >= DRAW_DIST || seg_n < 1) continue;
-
-        ProjSeg *ps = &proj[seg_n];
-        float car_x = ps->screen_x + rivals[i].x * ps->screen_w;
-        float car_scale = ps->scale * 800.0f;
-        draw_car(r, car_x, ps->screen_y, car_scale, rivals[i].colour);
-    }
-
-    /* ── Player car ───────────────────────────────────────────────────── */
-    draw_player_car(r, player_x);
-
-    /* ── HUD ──────────────────────────────────────────────────────────── */
-    SDL_Color white = {255, 255, 255};
-    SDL_Color yellow = {255, 220, 0};
-    SDL_Color red = {255, 50, 50};
-    SDL_Color green = {50, 255, 50};
-
-    /* HUD background */
-    SDL_SetRenderDrawColor(r, 0, 0, 0, 200);
-    SDL_RenderFillRect(r, &(SDL_Rect){0, 0, SCREEN_W, 55});
-
-    /* Speed display */
-    int kph = (int)(speed / MAX_SPEED * 320);
-    char speed_str[32];
-    snprintf(speed_str, sizeof(speed_str), "%3d KPH", kph);
-    draw_text_simple(r, speed_str, 20, 8, white, 3);
-
-    /* Speed bar */
-    float bar_pct = speed / MAX_SPEED;
-    SDL_Color bar_col = bar_pct > 0.8f ? red : bar_pct > 0.6f ? yellow : green;
-    SDL_SetRenderDrawColor(r, bar_col.r, bar_col.g, bar_col.b, 255);
-    SDL_RenderFillRect(r, &(SDL_Rect){20, 35, (int)(200 * bar_pct), 12});
-    SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
-    SDL_RenderDrawRect(r, &(SDL_Rect){20, 35, 200, 12});
-
-    /* Lap counter */
-    char lap_str[32];
-    snprintf(lap_str, sizeof(lap_str), "LAP %d/%d", lap > TRACK_LAPS ? TRACK_LAPS : lap, TRACK_LAPS);
-    draw_text_simple(r, lap_str, 400, 8, yellow, 3);
-
-    /* Time */
-    char time_str[32];
-    snprintf(time_str, sizeof(time_str), "TIME %.1f", total_time);
-    draw_text_simple(r, time_str, 400, 32, white, 2);
-
-    /* Best lap */
-    char best_str[32];
-    if (best_lap < 999.0f) {
-        snprintf(best_str, sizeof(best_str), "BEST %.2f", best_lap);
-    } else {
-        snprintf(best_str, sizeof(best_str), "BEST --.--");
-    }
-    draw_text_simple(r, best_str, 600, 8, green, 2);
-
-    /* Gear indicator */
-    int gear = 1 + (int)(speed / MAX_SPEED * 5);
-    if (gear > 6) gear = 6;
-    char gear_str[8];
-    snprintf(gear_str, sizeof(gear_str), "G%d", gear);
-    draw_text_simple(r, gear_str, 600, 32, white, 3);
-
-    /* ── Countdown / Game Over overlay ────────────────────────────────── */
-    if (countdown > 0) {
-        char cd_str[8];
-        snprintf(cd_str, sizeof(cd_str), "%d", countdown);
-        draw_text_simple(r, cd_str, SCREEN_W/2 - 20, SCREEN_H/2 - 40, red, 10);
-    } else if (countdown == 0 && countdown_t < 1.0f) {
-        draw_text_simple(r, "GO", SCREEN_W/2 - 30, SCREEN_H/2 - 30, green, 10);
-    }
-
-    if (game_over) {
-        SDL_SetRenderDrawColor(r, 0, 0, 0, 150);
-        SDL_RenderFillRect(r, &(SDL_Rect){SCREEN_W/4, SCREEN_H/3, SCREEN_W/2, SCREEN_H/3});
-        draw_text_simple(r, "RACE COMPLETE", SCREEN_W/2 - 180, SCREEN_H/2 - 40, yellow, 4);
-        char final_str[64];
-        snprintf(final_str, sizeof(final_str), "TOTAL %.2f", total_time);
-        draw_text_simple(r, final_str, SCREEN_W/2 - 120, SCREEN_H/2 + 20, white, 3);
-        draw_text_simple(r, "PRESS R TO RESTART", SCREEN_W/2 - 180, SCREEN_H/2 + 60, white, 2);
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
- *  UPDATE — physics, AI, collision
- * ═══════════════════════════════════════════════════════════════════════ */
-static void update(float dt) {
-    const Uint8 *keys = SDL_GetKeyboardState(NULL);
-    float track_len = TRACK_SEGS * SEG_LEN;
-
-    /* Countdown */
-    if (countdown > 0) {
-        countdown_t += dt;
-        if (countdown_t >= 1.0f) {
-            countdown_t = 0.0f;
-            countdown--;
-        }
-        return;
-    }
-    countdown_t += dt;  /* for "GO" display */
-
-    if (game_over) {
-        if (keys[SDL_SCANCODE_R]) {
-            /* Restart */
-            player_x = 0; player_z = 0; speed = 0;
-            lap = 1; lap_timer = 0; total_time = 0; best_lap = 999.0f;
-            countdown = 3; countdown_t = 0; game_over = 0;
-            init_rivals();
-        }
-        return;
-    }
-
-    /* Steering */
-    float steer = 0;
-    if (keys[SDL_SCANCODE_LEFT])  steer = -1.0f;
-    if (keys[SDL_SCANCODE_RIGHT]) steer =  1.0f;
-
-    /* Acceleration / braking */
-    if (keys[SDL_SCANCODE_UP])   speed += ACCEL * dt;
-    else if (keys[SDL_SCANCODE_DOWN]) speed -= BRAKE * dt;
-    else                           speed -= DECEL * dt;
-
-    /* Off-road penalty */
-    if (fabsf(player_x) > 1.0f) {
-        speed -= OFF_ROAD_DECEL * dt;
-    }
-
-    speed = clampf(speed, 0, MAX_SPEED);
-
-    /* Centrifugal force — pushed to the outside of curves */
-    int seg_idx = (int)(player_z / SEG_LEN) % TRACK_SEGS;
-    float curve = track[seg_idx].curve;
-    player_x += curve * CENTRIFUGAL * (speed / MAX_SPEED) * dt * STEER_SPEED;
-
-    /* Apply steering */
-    player_x += steer * STEER_SPEED * (speed / MAX_SPEED) * dt;
-
-    /* Move forward */
-    player_z += speed * dt;
-
-    /* Lap detection */
-    float prev_z = player_z - speed * dt;
-    if (player_z >= track_len && prev_z < track_len) {
-        if (lap_timer < best_lap) best_lap = lap_timer;
-        lap_timer = 0;
-        lap++;
-        if (lap > TRACK_LAPS) {
-            game_over = 1;
-        }
-    }
-    player_z = fmodf(player_z, track_len);
-
-    lap_timer  += dt;
-    total_time += dt;
-
-    /* ── Rival AI ─────────────────────────────────────────────────────── */
-    for (int i = 0; i < MAX_RIVALS; i++) {
-        rivals[i].z += rivals[i].speed * dt;
-        if (rivals[i].z >= track_len) rivals[i].z -= track_len;
-
-        /* Gentle lateral weave */
-        int rseg = (int)(rivals[i].z / SEG_LEN) % TRACK_SEGS;
-        rivals[i].x += track[rseg].curve * 0.002f;
-        rivals[i].x = clampf(rivals[i].x, -0.8f, 0.8f);
-
-        /* Collision with player */
-        float rel_z = rivals[i].z - player_z;
-        if (rel_z < 0) rel_z += track_len;
-        if (rel_z < SEG_LEN * 0.5f && fabsf(rivals[i].x - player_x) < 0.4f) {
-            speed *= 0.5f;  /* slow down on hit */
-            /* Push player sideways */
-            player_x += (player_x - rivals[i].x) * 0.5f;
-        }
-    }
+    /* Direction line */
+    for (int i = 0; i < 12; i++)
+        set_pixel(px + (int)(dir_x * i), py + (int)(dir_y * i), 0x00FFFF00);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
  *  MAIN
  * ═══════════════════════════════════════════════════════════════════════ */
 int main(int argc, char *argv[]) {
-    srand((unsigned)time(NULL));
+    (void)argc; (void)argv;
 
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         fprintf(stderr, "SDL init failed: %s\n", SDL_GetError());
@@ -729,35 +506,44 @@ int main(int argc, char *argv[]) {
     }
 
     window = SDL_CreateWindow(
-        "NFS Raycaster — Pseudo-3D Racing",
+        "Raycaster — True 3D",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         SCREEN_W, SCREEN_H,
         SDL_WINDOW_SHOWN
     );
     if (!window) {
-        fprintf(stderr, "Window creation failed: %s\n", SDL_GetError());
+        fprintf(stderr, "Window failed: %s\n", SDL_GetError());
         return 1;
     }
 
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (!renderer) {
-        fprintf(stderr, "Renderer creation failed: %s\n", SDL_GetError());
+        fprintf(stderr, "Renderer failed: %s\n", SDL_GetError());
         return 1;
     }
 
-    build_track();
-    init_rivals();
-    lap = 1;
-    prev_tick = SDL_GetPerformanceCounter();
+    fb_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB888,
+                               SDL_TEXTUREACCESS_STREAMING,
+                               SCREEN_W, SCREEN_H);
+    if (!fb_tex) {
+        fprintf(stderr, "Texture failed: %s\n", SDL_GetError());
+        return 1;
+    }
 
-    printf("╔══════════════════════════════════════╗\n");
-    printf("║     NFS RAYCASTER — Let's Race!      ║\n");
-    printf("╠══════════════════════════════════════╣\n");
-    printf("║  UP/DOWN   — Accelerate / Brake      ║\n");
-    printf("║  LEFT/RIGHT— Steer                   ║\n");
-    printf("║  ESC       — Quit                    ║\n");
-    printf("║  R         — Restart (after finish)   ║\n");
-    printf("╚══════════════════════════════════════╝\n");
+    gen_textures();
+    gen_sprite_textures();
+
+    Uint64 prev_tick = SDL_GetPerformanceCounter();
+
+    printf("╔══════════════════════════════╗\n");
+    printf("║   RAYCASTER — True 3D        ║\n");
+    printf("╠══════════════════════════════╣\n");
+    printf("║  W/UP    — Move forward      ║\n");
+    printf("║  S/DOWN  — Move backward     ║\n");
+    printf("║  A/LEFT  — Rotate left       ║\n");
+    printf("║  D/RIGHT — Rotate right      ║\n");
+    printf("║  ESC     — Quit              ║\n");
+    printf("╚══════════════════════════════╝\n");
 
     while (running) {
         SDL_Event e;
@@ -766,25 +552,71 @@ int main(int argc, char *argv[]) {
             if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) running = 0;
         }
 
+        /* Delta time */
         Uint64 now = SDL_GetPerformanceCounter();
-        float dt = (float)(now - prev_tick) / SDL_GetPerformanceFrequency();
+        double dt = (double)(now - prev_tick) / SDL_GetPerformanceFrequency();
         prev_tick = now;
-        if (dt > 0.05f) dt = 0.05f;  /* cap delta time */
+        if (dt > 0.05) dt = 0.05;
 
-        update(dt);
+        /* ── Input ────────────────────────────────────────────────────── */
+        const Uint8 *keys = SDL_GetKeyboardState(NULL);
 
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-        SDL_RenderClear(renderer);
+        /* Move forward/backward */
+        if (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) {
+            double new_x = pos_x + dir_x * MOVE_SPEED * dt;
+            double new_y = pos_y + dir_y * MOVE_SPEED * dt;
+            if (world_map[(int)pos_y][(int)new_x] == 0) pos_x = new_x;
+            if (world_map[(int)new_y][(int)pos_x] == 0) pos_y = new_y;
+        }
+        if (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN]) {
+            double new_x = pos_x - dir_x * MOVE_SPEED * dt;
+            double new_y = pos_y - dir_y * MOVE_SPEED * dt;
+            if (world_map[(int)pos_y][(int)new_x] == 0) pos_x = new_x;
+            if (world_map[(int)new_y][(int)pos_x] == 0) pos_y = new_y;
+        }
 
-        render(renderer);
+        /* Rotate */
+        if (keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT]) {
+            double old_dx = dir_x;
+            dir_x = dir_x * cos(ROT_SPEED * dt) - dir_y * sin(ROT_SPEED * dt);
+            dir_y = old_dx * sin(ROT_SPEED * dt) + dir_y * cos(ROT_SPEED * dt);
+            double old_px = plane_x;
+            plane_x = plane_x * cos(ROT_SPEED * dt) - plane_y * sin(ROT_SPEED * dt);
+            plane_y = old_px * sin(ROT_SPEED * dt) + plane_y * cos(ROT_SPEED * dt);
+        }
+        if (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT]) {
+            double old_dx = dir_x;
+            dir_x = dir_x * cos(-ROT_SPEED * dt) - dir_y * sin(-ROT_SPEED * dt);
+            dir_y = old_dx * sin(-ROT_SPEED * dt) + dir_y * cos(-ROT_SPEED * dt);
+            double old_px = plane_x;
+            plane_x = plane_x * cos(-ROT_SPEED * dt) - plane_y * sin(-ROT_SPEED * dt);
+            plane_y = old_px * sin(-ROT_SPEED * dt) + plane_y * cos(-ROT_SPEED * dt);
+        }
 
+        /* ── Render ───────────────────────────────────────────────────── */
+        memset(framebuf, 0, sizeof(framebuf));
+
+        /* Cast a ray for every screen column */
+        for (int x = 0; x < SCREEN_W; x++) {
+            cast_ray(x);
+        }
+
+        /* Draw sprites on top */
+        draw_sprites();
+
+        /* Minimap overlay */
+        draw_minimap();
+
+        /* Blit framebuffer */
+        SDL_UpdateTexture(fb_tex, NULL, framebuf, SCREEN_W * sizeof(uint32_t));
+        SDL_RenderCopy(renderer, fb_tex, NULL, NULL);
         SDL_RenderPresent(renderer);
     }
 
+    SDL_DestroyTexture(fb_tex);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
 
-    printf("Thanks for racing!\n");
     return 0;
 }
