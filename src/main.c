@@ -72,17 +72,7 @@ static double plane_y = 0.66;   /* camera plane, 66° FOV */
 #define MOVE_SPEED  3.0
 #define ROT_SPEED   2.0
 
-/* ── Wall colours per type ───────────────────────────────────────────── */
-static SDL_Color wall_colour(int type, int side, int shade) {
-    /* shade: 0=bright, 1=dark (for distance fog) */
-    int fog = shade ? 60 : 0;
-    switch (type) {
-        case 1: return (SDL_Color){ 180 - fog,  50 - fog/2,  50 - fog/2}; /* red brick   */
-        case 2: return (SDL_Color){  50 - fog/2, 180 - fog,  50 - fog/2}; /* green stone */
-        case 3: return (SDL_Color){  50 - fog/2,  50 - fog/2, 200 - fog}; /* blue metal  */
-        default: return (SDL_Color){ 150 - fog, 150 - fog, 150 - fog};     /* grey        */
-    }
-}
+/* ── Wall colours per type (unused — textures handle rendering) ──────── */
 
 /* ── Generate a procedural brick texture ─────────────────────────────── */
 #define TEX_SIZE 64
@@ -99,26 +89,26 @@ static void gen_textures(void) {
             for (int x = 0; x < TEX_SIZE; x++) {
                 uint8_t r, g, b;
                 int mortar = (x % 16 < 1) || (y % 8 < 1);
-                int offset = (y / 8) % 2 ? 8 : 0;  /* stagger bricks */
+                int x_shifted = x + (((y / 8) % 2) * 8);  /* stagger bricks */
 
                 if (t == 0) {
                     /* Red brick */
                     if (mortar) { r = 120; g = 110; b = 100; }
-                    else { r = 160 + (x*7 + y*13) % 30; g = 60 + (x*3) % 15; b = 50; }
+                    else { r = 160 + (x_shifted*7 + y*13) % 30; g = 60 + (x_shifted*3) % 15; b = 50; }
                 } else if (t == 1) {
                     /* Green stone */
                     if (mortar) { r = 60; g = 80; b = 60; }
-                    else { r = 40 + (x*11 + y*7) % 20; g = 140 + (x*5 + y*9) % 30; b = 50; }
+                    else { r = 40 + (x_shifted*11 + y*7) % 20; g = 140 + (x_shifted*5 + y*9) % 30; b = 50; }
                 } else if (t == 2) {
                     /* Blue metal with rivets */
-                    int rivet = ((x-4)%16 < 3 && (y-4)%16 < 3);
+                    int rivet = ((x_shifted-4)%16 < 3 && (y-4)%16 < 3);
                     if (mortar) { r = 40; g = 40; b = 100; }
                     else if (rivet) { r = 120; g = 120; b = 200; }
-                    else { r = 50 + (x+y)%10; g = 50 + (x+y)%10; b = 170 + (x*3)%30; }
+                    else { r = 50 + (x_shifted+y)%10; g = 50 + (x_shifted+y)%10; b = 170 + (x_shifted*3)%30; }
                 } else {
                     /* Grey concrete */
                     if (mortar) { r = 80; g = 80; b = 80; }
-                    else { int v = 130 + (x*17 + y*31) % 25; r = v; g = v; b = v; }
+                    else { int v = 130 + (x_shifted*17 + y*31) % 25; r = v; g = v; b = v; }
                 }
                 textures[t].pixels[y * TEX_SIZE + x] = (r << 16) | (g << 8) | b;
             }
