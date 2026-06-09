@@ -1,6 +1,4 @@
-# ──────────────────────────────────────────────────────────
-#  Raycaster — Makefile
-# ──────────────────────────────────────────────────────────
+# Raycaster - Makefile
 
 CC      = gcc
 CFLAGS  = -Wall -Wextra -O2 -std=c11
@@ -14,10 +12,10 @@ TARGET  = raycaster
 all: $(TARGET)
 
 $(TARGET): $(SRC)
-        $(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 run: $(TARGET)
-        ./$(TARGET)
+	./$(TARGET)
 
 clean:
-        rm -f $(TARGET)
+	rm -f $(TARGET)
