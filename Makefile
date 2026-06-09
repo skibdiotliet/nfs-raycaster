@@ -2,7 +2,7 @@
 
 CC      = gcc
 CFLAGS  = -Wall -Wextra -O2 -std=c11
-LDFLAGS = -lSDL2 -lm
+LDFLAGS = -lm
 
 SRC     = src/main.c
 TARGET  = raycaster
