@@ -1,0 +1,16 @@
+# Object files
+*.o
+*.obj
+
+# Binary
+nfs_raycaster
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
